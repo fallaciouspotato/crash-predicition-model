@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import joblib
 from streamlit_option_menu import option_menu
 
@@ -23,19 +22,19 @@ st.text("By Team 2 LPA")
 @st.cache_resource
 def load_model_and_encoders():
     """Loads the pre-trained model and encoders from disk."""
-    model = joblib.load('xgboost_model.joblib')
-    encoders = joblib.load('encoders.joblib')
-    return model, encoders
+    try:
+        model = joblib.load('xgboost_model.joblib')
+        encoders = joblib.load('encoders.joblib')
+        return model, encoders
+    except FileNotFoundError:
+        st.error("Model or encoder files not found. Please run the `train_and_save.py` script first.")
+        return None, None
 
 model, encoders = load_model_and_encoders()
 
-@st.cache_data
-def load_info_data():
-    """Loads a small subset of data for populating dropdowns and metrics."""
-    data = pd.read_csv('AviationData.csv', encoding='latin-1', usecols=['Make', 'Model', 'Engine_Type', 'Country', 'Weather_Condition', 'Broad_phase_of_flight', 'Purpose_of_flight'])
-    return data
-
-info_data = load_info_data()
+# Exit if model loading failed
+if not model or not encoders:
+    st.stop()
 
 # --- Main Title ---
 st.markdown("<h1 style='text-align: center; font-weight: bold;'>AVIATION DAMAGE PREDICTION SYSTEM</h1>", unsafe_allow_html=True)
@@ -65,6 +64,8 @@ if selected == "Home":
     - **Live Prediction:** Input details of a hypothetical incident to get an instant damage prediction.
     - **Crash Case Studies:** Review summaries of notable historical aviation incidents.
     """)
+    st.success("Model status: **Loaded and ready**")
+
 
 elif selected == "Live Prediction":
     st.subheader(f"Enter incident details below to get a real-time prediction.")
@@ -73,16 +74,17 @@ elif selected == "Live Prediction":
     input_features = {}
     col1, col2, col3 = st.columns(3)
 
+    # Use the classes from the loaded encoders to populate dropdowns
     with col1:
-        input_features['Make'] = st.selectbox("Aircraft Make", options=[''] + sorted(list(info_data['Make'].unique())))
-        input_features['Model'] = st.selectbox("Aircraft Model", options=[''] + sorted(list(info_data['Model'].unique())))
-        input_features['Engine_Type'] = st.selectbox("Engine Type", options=[''] + sorted(list(info_data['Engine_Type'].unique())))
-        input_features['Country'] = st.selectbox("Country", options=[''] + sorted(list(info_data['Country'].unique())))
+        input_features['Make'] = st.selectbox("Aircraft Make", options=[''] + list(encoders['Make'].classes_))
+        input_features['Model'] = st.selectbox("Aircraft Model", options=[''] + list(encoders['Model'].classes_))
+        input_features['Engine_Type'] = st.selectbox("Engine Type", options=[''] + list(encoders['Engine_Type'].classes_))
+        input_features['Country'] = st.selectbox("Country", options=[''] + list(encoders['Country'].classes_))
 
     with col2:
-        input_features['Weather_Condition'] = st.selectbox("Weather Condition", options=[''] + sorted(list(info_data['Weather_Condition'].unique())))
-        input_features['Broad_phase_of_flight'] = st.selectbox("Phase of Flight", options=[''] + sorted(list(info_data['Broad_phase_of_flight'].unique())))
-        input_features['Purpose_of_flight'] = st.selectbox("Purpose of Flight", options=[''] + sorted(list(info_data['Purpose_of_flight'].unique())))
+        input_features['Weather_Condition'] = st.selectbox("Weather Condition", options=[''] + list(encoders['Weather_Condition'].classes_))
+        input_features['Broad_phase_of_flight'] = st.selectbox("Phase of Flight", options=[''] + list(encoders['Broad_phase_of_flight'].classes_))
+        input_features['Purpose_of_flight'] = st.selectbox("Purpose of Flight", options=[''] + list(encoders['Purpose_of_flight'].classes_))
         input_features['Number_of_Engines'] = st.number_input('Number of Engines', min_value=0, max_value=8, value=2)
 
     with col3:
@@ -99,13 +101,15 @@ elif selected == "Live Prediction":
             st.error("Please fill in all dropdown details before predicting.")
         else:
             input_df = pd.DataFrame([input_features])
+            
+            # Use the loaded encoders to transform the input
             for col, encoder in encoders.items():
                 if col in input_df.columns:
-                    # Handle unseen labels by mapping to 'Unknown'
                     input_val = input_df.iloc[0][col]
                     if input_val not in encoder.classes_:
-                        input_df[col] = 'Unknown'
-                    input_df[col] = encoder.transform(input_df[col])
+                        st.error(f"Error: The value '{input_val}' for '{col}' was not seen during training. Please choose a different value.")
+                        st.stop()
+                    input_df[col] = encoder.transform([input_val])
             
             training_cols = model.get_booster().feature_names
             input_df = input_df[training_cols]
@@ -123,7 +127,6 @@ elif selected == "Live Prediction":
 elif selected == "Crash Case Studies":
     st.subheader("A review of notable aviation incidents to understand contributing factors.")
     
-    # ... (rest of the crash case studies expanders remain the same) ...
     crashes = {
         "Tenerife Airport Disaster (1977)": {"summary": "**Date:** March 27, 1977 | **Aircraft:** Boeing 747-100 & 747-200 | **Fatalities:** 583\n\nThe deadliest accident in aviation history. Two Boeing 747s collided on the runway at Los Rodeos Airport in heavy fog."},
         "American Airlines Flight 191 (1979)": {"summary": "**Date:** May 25, 1979 | **Aircraft:** McDonnell Douglas DC-10 | **Fatalities:** 273\n\nShortly after takeoff from Chicago O'Hare, the left engine detached from the wing, severing hydraulic lines and causing catastrophic damage."},
@@ -134,9 +137,4 @@ elif selected == "Crash Case Studies":
         "Air India Express Flight 812 (2010)": {"summary": "**Date:** May 22, 2010 | **Aircraft:** Boeing 737-800 | **Fatalities:** 158\n\nThe aircraft overshot a 'tabletop' runway upon landing at Mangalore International Airport and fell down a hillside."},
         "Malaysia Airlines Flight 370 (2014)": {"summary": "**Date:** March 8, 2014 | **Aircraft:** Boeing 777-200ER | **Fatalities:** 239 (Presumed)\n\nThe flight disappeared from radar, and despite an extensive search, the aircraft has never been found."},
         "Lion Air Flight 610 (2018)": {"summary": "**Date:** October 29, 2018 | **Aircraft:** Boeing 737 MAX 8 | **Fatalities:** 189\n\nA faulty sensor activated the MCAS flight control system, repeatedly pushing the aircraft's nose down until the pilots lost control."},
-        "Ethiopian Airlines Flight 302 (2019)": {"summary": "**Date:** March 10, 2019 | **Aircraft:** Boeing 737 MAX 8 | **Fatalities:** 157\n\nSimilar to the Lion Air crash, a faulty sensor activated the MCAS system, leading to the worldwide grounding of the 737 MAX fleet."},
-    }
-    
-    for crash_name, crash_info in crashes.items():
-        with st.expander(f"✈️ **{crash_name}**"):
-            st.markdown(crash_info['summary'])
+        "Ethiopian Airlines Flight 302 (2019)": {"summary": "**Date:** March 10, 2019 | **Aircraft:** Boeing 737 MAX 8 | **Fatalities:** 157\n\nSimilar to the Lion Air crash, a faulty sensor
