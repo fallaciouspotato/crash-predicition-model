@@ -7,3 +7,4 @@ seaborn
 streamlit-option-menu
 scikit-learn
 xgboost
+joblib
