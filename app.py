@@ -55,8 +55,8 @@ def load_data():
     return data
 
 @st.cache_resource
-def train_models(data_df):
-    """Trains models and returns all necessary components."""
+def train_model(data_df): # Renamed to train_model (singular)
+    """Trains a single, optimized model and returns its components."""
     features = [
         'Make', 'Model', 'Engine_Type', 'Number_of_Engines', 'Weather_Condition',
         'Broad_phase_of_flight', 'Purpose_of_flight', 'Country', 'Year', 'Month',
@@ -77,38 +77,40 @@ def train_models(data_df):
 
     X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded)
     
+    # --- OPTIMIZED MODEL PARAMETERS for faster performance ---
     xgb_tuned_params = {
-        'objective': 'multi:softmax', 'n_estimators': 300, 'max_depth': 8,
-        'learning_rate': 0.1, 'subsample': 0.8, 'colsample_bytree': 0.8,
-        'use_label_encoder': False, 'eval_metric': 'mlogloss', 'random_state': 42
-    }
-
-    models = {
-        "Random Forest (Baseline)": RandomForestClassifier(n_estimators=100, random_state=42),
-        "XGBoost (Optimized)": XGBClassifier(**xgb_tuned_params)
+        'objective': 'multi:softmax',
+        'n_estimators': 200,  # Reduced from 300
+        'max_depth': 7,       # Reduced from 8
+        'learning_rate': 0.1,
+        'subsample': 0.8,
+        'colsample_bytree': 0.8,
+        'use_label_encoder': False,
+        'eval_metric': 'mlogloss',
+        'random_state': 42
     }
     
-    trained_models = {}
-    for name, model in models.items():
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        performance = {
-            "Accuracy": accuracy_score(y_test, y_pred),
-            "F1 Score": f1_score(y_test, y_pred, average='weighted'),
-            "Confusion Matrix": confusion_matrix(y_test, y_pred),
-            "Classes": y_encoder.classes_
-        }
-        if hasattr(model, 'feature_importances_'):
-            performance['Feature Importances'] = model.feature_importances_
-            performance['Feature Names'] = X.columns
-        trained_models[name] = {"model": model, "performance": performance, "encoders": encoders, "y_encoder": y_encoder}
-    return trained_models
+    # --- Train only ONE model to save memory ---
+    model = XGBClassifier(**xgb_tuned_params)
+    model.fit(X_train, y_train)
+    
+    y_pred = model.predict(X_test)
+    performance = {
+        "Accuracy": accuracy_score(y_test, y_pred),
+        "F1 Score": f1_score(y_test, y_pred, average='weighted'),
+        "Confusion Matrix": confusion_matrix(y_test, y_pred),
+        "Classes": y_encoder.classes_
+    }
+    if hasattr(model, 'feature_importances_'):
+        performance['Feature Importances'] = model.feature_importances_
+        performance['Feature Names'] = X.columns
+        
+    model_pack = {"model": model, "performance": performance, "encoders": encoders, "y_encoder": y_encoder}
+    return model_pack
 
 # --- Load data and models ---
 data = load_data()
-models_info = train_models(data)
-best_model_name = "XGBoost (Optimized)"
-best_model_pack = models_info[best_model_name]
+model_pack = train_model(data) # Call the simplified function
 
 # --- Main Title ---
 st.markdown("<h1 style='text-align: center; font-weight: bold;'>AVIATION DAMAGE PREDICTION SYSTEM</h1>", unsafe_allow_html=True)
@@ -144,20 +146,20 @@ if selected == "Home":
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Incidents Analyzed", f"{data.shape[0]:,}")
-    col2.metric("Prediction Accuracy", f"{best_model_pack['performance']['Accuracy']:.2%}")
+    col2.metric("Prediction Accuracy", f"{model_pack['performance']['Accuracy']:.2%}")
     col3.metric("Key Risk Factor", "Fatal Injuries")
 
     st.markdown("#### How to use this application:")
     st.info("""
     - **Live Prediction:** Go to this tab to input details of a hypothetical incident and get an instant damage prediction.
     - **Crash Case Studies:** Review summaries of notable historical aviation incidents.
-    - **Model Performance:** Explore the accuracy and other metrics of our prediction models.
+    - **Model Performance:** Explore the accuracy and other metrics of our prediction model.
     - **Data Analysis:** Dive deep into the dataset with interactive charts and graphs.
     """)
 
 # --- Live Prediction Page ---
 if selected == "Live Prediction":
-    st.subheader(f"Enter incident details below. Our **{best_model_name}** model will predict the outcome.")
+    st.subheader(f"Enter incident details below. Our optimized model will predict the outcome.")
     st.markdown("---")
 
     input_features = {}
@@ -190,16 +192,16 @@ if selected == "Live Prediction":
             st.error("Please fill in all dropdown details before predicting.")
         else:
             input_df = pd.DataFrame([input_features])
-            for col, encoder in best_model_pack['encoders'].items():
+            for col, encoder in model_pack['encoders'].items():
                 if col in input_df.columns:
                     input_df[col] = encoder.transform(input_df[col])
             
-            training_cols = best_model_pack['model'].get_booster().feature_names
+            training_cols = model_pack['model'].get_booster().feature_names
             input_df = input_df[training_cols]
             
-            prediction_encoded = best_model_pack['model'].predict(input_df)[0]
-            prediction_proba = best_model_pack['model'].predict_proba(input_df)
-            prediction_decoded = best_model_pack['y_encoder'].inverse_transform([prediction_encoded])[0]
+            prediction_encoded = model_pack['model'].predict(input_df)[0]
+            prediction_proba = model_pack['model'].predict_proba(input_df)
+            prediction_decoded = model_pack['y_encoder'].inverse_transform([prediction_encoded])[0]
             
             res_col1, res_col2 = st.columns(2)
             with res_col1:
@@ -213,24 +215,25 @@ if selected == "Live Prediction":
 
             with res_col2:
                 st.subheader("Prediction Probabilities")
-                prob_df = pd.DataFrame(prediction_proba, columns=best_model_pack['performance']['Classes'])
+                prob_df = pd.DataFrame(prediction_proba, columns=model_pack['performance']['Classes'])
                 st.dataframe(prob_df)
 
 # --- Crash Case Studies Page ---
 if selected == "Crash Case Studies":
     st.subheader("A review of notable aviation incidents. These case studies highlight the complex factors involved in aircraft accidents.")
     
+    # Expanded list of crashes
     crashes = {
-        "Tenerife Airport Disaster (1977)": {"summary": "**Date:** March 27, 1977 | **Aircraft:** Boeing 747-100 & 747-200 | **Fatalities:** 583\n\nThe deadliest accident in aviation history. Two Boeing 747s collided on the runway at Los Rodeos Airport in heavy fog. A series of miscommunications and procedural errors led to one aircraft attempting to take off while the other was still on the same runway."},
-        "American Airlines Flight 191 (1979)": {"summary": "**Date:** May 25, 1979 | **Aircraft:** McDonnell Douglas DC-10 | **Fatalities:** 273\n\nShortly after takeoff from Chicago O'Hare, the left engine detached from the wing, severing hydraulic lines and causing catastrophic damage. The aircraft rolled and crashed less than a minute later. The cause was traced to faulty maintenance procedures."},
-        "Japan Airlines Flight 123 (1985)": {"summary": "**Date:** August 12, 1985 | **Aircraft:** Boeing 747SR | **Fatalities:** 520\n\nA faulty repair of the rear pressure bulkhead from a previous incident failed, causing an explosive decompression that destroyed the vertical stabilizer and all hydraulic systems. The crew fought to control the aircraft for 32 minutes before crashing."},
-        "Indian Airlines Flight 113 (1988)": {"summary": "**Date:** October 19, 1988 | **Aircraft:** Boeing 737-200 | **Fatalities:** 133\n\nThe flight crashed on final approach to Ahmedabad, in poor visibility. The investigation highlighted issues with crew decision-making in adverse weather and non-adherence to standard approach procedures."},
-        "US Airways Flight 1549 (2009)": {"summary": "**Date:** January 15, 2009 | **Aircraft:** Airbus A320-214 | **Fatalities:** 0\n\nThe 'Miracle on the Hudson.' The aircraft lost all engine power after a bird strike. The crew successfully ditched the plane on the Hudson River with no fatalities, showcasing exceptional airmanship."},
-        "Air France Flight 447 (2009)": {"summary": "**Date:** June 1, 2009 | **Aircraft:** Airbus A330-203 | **Fatalities:** 228\n\nThe aircraft's airspeed sensors became iced over at high altitude, leading to the autopilot disconnecting. The crew's incorrect response caused the aircraft to enter a stall from which it did not recover."},
-        "Air India Express Flight 812 (2010)": {"summary": "**Date:** May 22, 2010 | **Aircraft:** Boeing 737-800 | **Fatalities:** 158\n\nThe aircraft overshot the runway upon landing at Mangalore International Airport, which is a 'tabletop' runway with steep drops at either end. The aircraft fell down a hillside and caught fire. Pilot error was cited as the primary cause."},
-        "Malaysia Airlines Flight 370 (2014)": {"summary": "**Date:** March 8, 2014 | **Aircraft:** Boeing 777-200ER | **Fatalities:** 239 (Presumed)\n\nThe flight disappeared from radar while en route from Kuala Lumpur to Beijing. Despite the most extensive search in aviation history, the aircraft has never been found. The cause of the disappearance remains one of the greatest mysteries in modern aviation."},
-        "Lion Air Flight 610 (2018)": {"summary": "**Date:** October 29, 2018 | **Aircraft:** Boeing 737 MAX 8 | **Fatalities:** 189\n\nOne of two fatal crashes involving the Boeing 737 MAX. A faulty angle of attack sensor activated the MCAS flight control system, which repeatedly pushed the aircraft's nose down. The pilots were unable to regain control, and the aircraft crashed into the Java Sea shortly after takeoff."},
-        "Ethiopian Airlines Flight 302 (2019)": {"summary": "**Date:** March 10, 2019 | **Aircraft:** Boeing 737 MAX 8 | **Fatalities:** 157\n\nSimilar to the Lion Air crash, a faulty sensor activated the MCAS system, causing the aircraft to enter an unrecoverable dive. This second incident led to the worldwide grounding of the entire Boeing 737 MAX fleet."},
+        "Tenerife Airport Disaster (1977)": {"summary": "**Date:** March 27, 1977 | **Aircraft:** Boeing 747-100 & 747-200 | **Fatalities:** 583\n\nThe deadliest accident in aviation history. Two Boeing 747s collided on the runway at Los Rodeos Airport in heavy fog."},
+        "American Airlines Flight 191 (1979)": {"summary": "**Date:** May 25, 1979 | **Aircraft:** McDonnell Douglas DC-10 | **Fatalities:** 273\n\nShortly after takeoff from Chicago O'Hare, the left engine detached from the wing, severing hydraulic lines and causing catastrophic damage."},
+        "Japan Airlines Flight 123 (1985)": {"summary": "**Date:** August 12, 1985 | **Aircraft:** Boeing 747SR | **Fatalities:** 520\n\nA faulty repair of the rear pressure bulkhead failed, causing an explosive decompression that destroyed the vertical stabilizer and all hydraulic systems."},
+        "Indian Airlines Flight 113 (1988)": {"summary": "**Date:** October 19, 1988 | **Aircraft:** Boeing 737-200 | **Fatalities:** 133\n\nThe flight crashed on final approach to Ahmedabad, in poor visibility."},
+        "US Airways Flight 1549 (2009)": {"summary": "**Date:** January 15, 2009 | **Aircraft:** Airbus A320-214 | **Fatalities:** 0\n\nThe 'Miracle on the Hudson.' The aircraft lost all engine power after a bird strike and was ditched on the Hudson River."},
+        "Air France Flight 447 (2009)": {"summary": "**Date:** June 1, 2009 | **Aircraft:** Airbus A330-203 | **Fatalities:** 228\n\nThe aircraft's airspeed sensors became iced over at high altitude, leading to a stall from which the crew did not recover."},
+        "Air India Express Flight 812 (2010)": {"summary": "**Date:** May 22, 2010 | **Aircraft:** Boeing 737-800 | **Fatalities:** 158\n\nThe aircraft overshot a 'tabletop' runway upon landing at Mangalore International Airport and fell down a hillside."},
+        "Malaysia Airlines Flight 370 (2014)": {"summary": "**Date:** March 8, 2014 | **Aircraft:** Boeing 777-200ER | **Fatalities:** 239 (Presumed)\n\nThe flight disappeared from radar, and despite an extensive search, the aircraft has never been found."},
+        "Lion Air Flight 610 (2018)": {"summary": "**Date:** October 29, 2018 | **Aircraft:** Boeing 737 MAX 8 | **Fatalities:** 189\n\nA faulty sensor activated the MCAS flight control system, repeatedly pushing the aircraft's nose down until the pilots lost control."},
+        "Ethiopian Airlines Flight 302 (2019)": {"summary": "**Date:** March 10, 2019 | **Aircraft:** Boeing 737 MAX 8 | **Fatalities:** 157\n\nSimilar to the Lion Air crash, a faulty sensor activated the MCAS system, leading to the worldwide grounding of the 737 MAX fleet."},
     }
     
     for crash_name, crash_info in crashes.items():
@@ -240,35 +243,33 @@ if selected == "Crash Case Studies":
 # --- Model Performance Page ---
 if selected == "Model Performance":
     st.subheader("Model Performance & In-Depth Analysis")
-    st.markdown("Here we analyze our models to understand their performance and the factors driving their predictions.")
-    st.header("📈 Model Comparison")
+    st.markdown("Here we analyze our optimized XGBoost model to understand its performance.")
     
-    perf_list = []
-    for name, info in models_info.items():
-        p = info['performance']
-        perf_list.append({'Model': name, 'Metric': 'Accuracy', 'Score': p['Accuracy']})
-        perf_list.append({'Model': name, 'Metric': 'F1 Score', 'Score': p['F1 Score']})
+    p = model_pack['performance']
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Model Accuracy", f"{p['Accuracy']:.2%}")
+    with col2:
+        st.metric("Model F1-Score", f"{p['F1 Score']:.3f}")
     
-    perf_df = pd.DataFrame(perf_list)
-    fig_comp = px.bar(perf_df, x="Metric", y="Score", color="Model", barmode="group", title="Side-by-Side Model Performance Metrics")
-    st.plotly_chart(fig_comp, use_container_width=True)
+    st.markdown("---")
 
     col1, col2 = st.columns(2)
     with col1:
         st.header(f"⚙️ Feature Importance")
-        st.markdown("This chart shows which factors our best model (**XGBoost**) considers most important.")
-        importances = best_model_pack['performance']['Feature Importances']
-        feature_names = best_model_pack['performance']['Feature Names']
+        st.markdown("This chart shows which factors our model considers most important.")
+        importances = p['Feature Importances']
+        feature_names = p['Feature Names']
         feature_imp_df = pd.DataFrame({'feature': feature_names, 'importance': importances}).sort_values('importance', ascending=False).head(10)
-        fig_imp = px.bar(feature_imp_df, x='importance', y='feature', orientation='h', title=f"Top 10 Features for {best_model_name}")
+        fig_imp = px.bar(feature_imp_df, x='importance', y='feature', orientation='h', title=f"Top 10 Features for Prediction")
         fig_imp.update_layout(yaxis={'categoryorder':'total ascending'})
         st.plotly_chart(fig_imp, use_container_width=True)
 
     with col2:
         st.header("🚦 Confusion Matrix")
         st.markdown("This matrix shows the detailed breakdown of our model's predictions.")
-        cm = best_model_pack['performance']['Confusion Matrix']
-        classes = best_model_pack['performance']['Classes']
+        cm = p['Confusion Matrix']
+        classes = p['Classes']
         fig_cm, ax = plt.subplots()
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=classes, yticklabels=classes, ax=ax)
         ax.set_xlabel('Predicted Label'); ax.set_ylabel('True Label')
